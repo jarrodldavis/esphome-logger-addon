@@ -1,21 +1,25 @@
-# ESPHome Logger — Home Assistant add-on repository
+# Home Assistant add-on repository
 
-This repository contains a single Home Assistant OS add-on:
+One add-on lives here: **ESPHome Logger**. It captures live logs from your ESPHome devices, writes them under `/share`, and pokes Home Assistant when something looks off.
 
-| Add-on | Description |
-| ------ | ----------- |
-| [esphome_logger](./esphome_logger/) | Discovers ESPHome devices on the LAN, persists logs from a selected subset to `/share/esphome-logs/<device>/<device>.log` with per-device rotation/retention, posts HA `persistent_notification`s on threshold-breach anomalies, and emits a consolidated daily summary at a configured time. |
+## Install
 
-## Installation
+In Home Assistant:
 
-Open Home Assistant → **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, paste this repo's URL, click **Add**. The ESPHome Logger add-on will then appear at the bottom of the store.
+1. Settings → Add-ons → Add-on Store
+2. Three-dot menu (top right) → Repositories
+3. Paste `https://github.com/dcgrove/esphome-logger-addon` and click Add
 
-(If the repository is private, your Home Assistant has to be able to read it — either make the repo public, or supply HA with a credentials helper. For a single private HA instance, the simplest workaround is to keep the repository public-but-unlisted: don't share the URL, but leave the repo public on GitHub so the Supervisor can clone it. Use a private repo if you want stronger access control and are comfortable configuring HA's git auth.)
+ESPHome Logger then shows up at the bottom of the store. Install it, flip on "Start on boot" and "Watchdog", start, and check the Configuration tab.
 
-## Add-on docs
+The add-on needs to be public on GitHub for the supervisor to clone it. If you fork this and make your fork private, the URL install won't work and you'll need to copy `esphome_logger/` into `/addons/` on your HA host instead. After any change to `config.yaml`'s `map:` or `host_network:` fields, run `ha supervisor restart` so the supervisor re-reads the manifest.
 
-See [`esphome_logger/README.md`](./esphome_logger/README.md) for full configuration reference, rotation semantics, notification rules, and troubleshooting.
+## What's here
 
-## Versioning
+```
+esphome_logger/     the add-on (config.yaml, Dockerfile, main.py, …)
+repository.yaml     HA store metadata
+LICENSE             MIT
+```
 
-Tagged releases follow the version in `esphome_logger/config.yaml` (currently **2.2.0**). Increment the version field whenever you change anything that affects behaviour so the Supervisor picks up the update.
+Full docs and configuration reference are in [`esphome_logger/README.md`](./esphome_logger/README.md).

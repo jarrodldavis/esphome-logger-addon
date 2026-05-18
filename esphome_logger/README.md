@@ -1,108 +1,42 @@
-# ESPHome Logger (Home Assistant local add-on)
+# ESPHome Logger
 
-A Home Assistant OS add-on that discovers ESPHome devices on your LAN via
-mDNS, then persists logs from a **user-selected subset** of them to
-`/share/esphome-logs/<device-name>/<device-name>.log` with **per-device**
-rotation and retention.
+Captures live logs from your ESPHome devices, writes them to `/share/esphome-logs/<device>/<device>.log`, and pings you in Home Assistant when something looks off.
 
-Why this instead of a `systemd` service? Home Assistant OS doesn't expose
-systemd to users. The HA-OS-native way to run "a service that starts on boot"
-is a local add-on managed by the Supervisor — this folder is that add-on.
+I built this because the ESPHome dashboard's log viewer is great for debugging live, but it doesn't keep anything. When a sensor flakes out at 3am or a device starts rebooting itself, you want history.
 
-## Features
+## What it does
 
-- mDNS discovery on startup: the add-on log lists every ESPHome device it
-  sees, with hostname and IPv4 address. You then opt-in by adding entries to
-  the `devices:` list in the Configuration tab.
-- Per-device settings: each device can have its own rotation frequency
-  (`hourly` / `daily` / `weekly` / `size`), retention count, log level, and
-  (for size-based rotation) a max file size.
-- Concurrent: each device runs in its own asyncio task. One device dropping or
-  failing auth doesn't affect the others.
-- Plain-text output: ANSI color codes are stripped, every line is prefixed
-  with an ISO-8601 timestamp.
-- Anomaly notifications: the add-on watches the live log stream for errors,
-  warnings, reboots, brownouts, watchdog/crash signatures, Wi-Fi disconnects,
-  and sensor failures. When configured thresholds are crossed within a rolling
-  window, it posts a `persistent_notification` to Home Assistant (visible in
-  the HA bell icon and on the mobile app). Notifications are debounced to at
-  most one per device per `debounce_minutes`. (True HA "Repair" cards require
-  a custom integration and are not provided by this add-on.)
-- Daily summary: at a configured time each day (default 08:00 local), the
-  add-on posts a single consolidated `persistent_notification` covering every
-  device's last 24h of activity with a ✅ / ⚠️ / 🚨 verdict — useful as a
-  heartbeat on quiet days and an early warning on bad ones.
+Reads HA's own config entries to learn what ESPHome devices exist on your network, where they live, and what their PSKs are. No mDNS browsing, no copying keys out of `secrets.yaml`. Streams logs over each device's native API. Rotates daily by default and keeps 30 days; hourly, weekly, and size-based rotation are options too.
 
-## Output layout
+Watches for trouble in real time: errors, warnings, reboots, brownouts, watchdog crashes, Wi-Fi disconnects, sensor failures. When the count crosses a threshold inside a rolling 24-hour window, you get a persistent notification in HA. Debounced to at most one per device per hour by default, so a stuck sensor can't spam you.
+
+Posts a consolidated daily summary at 8am (configurable) with a verdict icon per device, so you know everything's healthy without having to look. Set `post_when_clean: false` if you only want to hear about bad days.
+
+## Install
+
+In Home Assistant: Settings → Add-ons → Add-on Store → ⋮ → Repositories → paste `https://github.com/dcgrove/esphome-logger-addon` → Add. ESPHome Logger appears in the store; install it, set boot=auto and watchdog=on, start.
+
+For a direct copy without going through the repository URL, drop this folder into `/addons/esphome_logger/` on the HA host. After any `map:` or `host_network:` change you'll need `ha supervisor restart` to get the supervisor to re-read the manifest.
+
+## First run
+
+Start the add-on with the defaults and check its log. You'll see something like:
 
 ```
-/share/esphome-logs/
-    crowpanel/
-        crowpanel.log              <- current
-        crowpanel.log.2026-05-10   <- rotated
-        crowpanel.log.2026-05-09
-        ...
-    thermostat/
-        thermostat.log
-        thermostat.log.2026-05-11_14
-        ...
+discovery: 12 ESPHome device(s) registered in HA:
+  - crowpanel5         address=192.168.1.197   psk=set       (CrowPanel 5)
+  - upsy-desky         address=192.168.1.42    psk=set       (Upsy Desky)
+  - kiln-controller    address=192.168.1.99    psk=MISSING   (Kiln Controller)
+  ...
 ```
 
-Browse `/share/` from the Samba share, File editor, Studio Code Server, or
-Advanced SSH & Web Terminal add-ons.
+Pick which ones to capture and add them under `devices:`, or just set `auto_add_devices: true` to enroll everything HA knows about.
 
-## Installation
-
-### 1. Copy the folder onto your HA host
-
-The folder must end up at `/addons/esphome_logger/` on the host. Two ways:
-
-- **Samba**: install the *Samba share* add-on, drag the folder into the
-  `addons` share.
-- **SSH**: install the *Advanced SSH & Web Terminal* add-on, then from your
-  Mac: `scp -r esphome_logger root@homeassistant.local:/addons/`
-
-Final layout:
-
-```
-/addons/esphome_logger/config.yaml
-/addons/esphome_logger/Dockerfile
-/addons/esphome_logger/main.py
-/addons/esphome_logger/run.sh
-/addons/esphome_logger/README.md
-```
-
-### 2. Discover the add-on
-
-Settings → Add-ons → **Add-on Store** → ⋮ → **Check for updates**. The add-on
-appears at the bottom under **Local add-ons** as "ESPHome Logger".
-
-### 3. Install, then let it discover devices first
-
-Install (build takes ~2 minutes on a Pi). On the **Info** tab turn on **Start
-on boot** and **Watchdog**, then **Start**. Open the **Log** tab — you should
-see:
-
-```
-[2026-05-11T...] ESPHome Logger starting
-[2026-05-11T...] discovery: browsing _esphomelib._tcp.local. for 6s ...
-[2026-05-11T...] discovery: 3 device(s) found:
-  - crowpanel     address=192.168.1.42  hostname=crowpanel.local
-  - thermostat    address=192.168.1.51  hostname=thermostat.local
-  - garage-door   address=192.168.1.77  hostname=garage-door.local
-```
-
-(if you don't see any devices, mDNS may be blocked between VLANs — verify
-`host_network: true` in `config.yaml` and that the add-on actually has
-host-network access in your HA setup.)
-
-### 4. Pick which devices to log, configure rotation per device
-
-Edit the **Configuration** tab:
+## Configuration
 
 ```yaml
 discover_on_start: true
-discovery_timeout: 6
+auto_add_devices: false        # set true to capture every HA-known device
 log_subdir: esphome-logs
 
 defaults:
@@ -113,35 +47,25 @@ defaults:
 
 devices:
   - name: crowpanel
-    address: crowpanel.local
-    noise_psk: "BASE64-PSK-FROM-crowpanel.yaml"
+    address: 192.168.1.197
+    noise_psk: "your-base64-psk"
     rotation: daily
     retention: 30
-    log_level: DEBUG
-    notify: true
 
-  - name: thermostat
-    address: 192.168.1.51
-    noise_psk: "BASE64-PSK-FROM-thermostat.yaml"
-    rotation: hourly
-    retention: 48        # 48 hourly files = last 2 days
-    log_level: INFO
-    notify: true
-
-  - name: garage-door
-    address: garage-door.local
+  - name: noisy-sensor
+    address: 192.168.1.50
+    noise_psk: "..."
     rotation: size
     max_size_mb: 5
-    retention: 10        # keep 10 backup files = ~50 MB total
-    log_level: WARN
-    notify: false        # noisy device, opted out of notifications
+    retention: 10              # 10 backup files of 5MB each
+    notify: false              # don't page me until I fix this
 
 notifications:
   enabled: true
   debounce_minutes: 60
   window_hours: 24
   thresholds:
-    error: 1             # any single error fires
+    error: 1                   # any single error fires
     warning: 10
     reboot: 2
     brownout: 1
@@ -151,150 +75,71 @@ notifications:
 
 daily_summary:
   enabled: true
-  hour: 8                # local time
+  hour: 8
   minute: 0
-  post_when_clean: true  # also post when everything is healthy (a heartbeat)
+  post_when_clean: true
 ```
 
-Save, restart the add-on.
+## Per-device options
 
-### Configuration reference
+`name` and `address` are required. Everything else falls back to `defaults:` if you don't set it.
 
-`discover_on_start` *(bool, default true)*: run mDNS browse on startup and
-print results to the add-on log.
+- `noise_psk` — base64 key from `api: encryption: key:` in the device's YAML. Required if the device has encryption enabled (it almost certainly does on anything built in the last couple of years).
+- `password` — only for legacy API password auth. Skip if you use noise.
+- `rotation` — `hourly`, `daily`, `weekly`, or `size`.
+- `retention` — for time-based rotation, how many past periods to keep (30 daily = 30 days). For size-based, how many backup files.
+- `max_size_mb` — only used when `rotation: size`. 10 MB default.
+- `log_level` — `NONE` / `ERROR` / `WARN` / `INFO` / `DEBUG` / `VERBOSE` / `VERY_VERBOSE`. Don't use VERY_VERBOSE on anything you care about; it can choke the device.
+- `notify` — set false to keep capturing the log but stop paging on this device. Useful for the one chatty sensor you haven't gotten around to fixing.
 
-`discovery_timeout` *(int, default 6)*: how long to listen for mDNS responses.
+## Notifications
 
-`log_subdir` *(str, default `esphome-logs`)*: subdirectory under `/share/`.
+Each log line gets sorted into a category: error (`[E]`), warning (`[W]`), reboot, brownout, watchdog, Wi-Fi disconnect, or sensor failure. The add-on keeps a rolling window per device. When any category crosses its threshold, it posts a `persistent_notification` — that's the bell icon in the HA UI and the mobile app notification if you have it.
 
-`defaults` *(map)*: applied to any device whose own field is missing.
+Each device gets at most one notification per `debounce_minutes`. The notification ID is per-device (`esphome_logger_<name>`), so a new alert for the same device overwrites the previous one rather than stacking ten of them in your bell.
 
-`devices` *(list)*: one entry per device to capture.
+The daily summary uses its own ID (`esphome_logger_daily_summary`) and gets one combined notification per day with all devices' counts and a ✅ / ⚠️ / 🚨 verdict.
 
-Per-device fields:
+HA Repair cards aren't an option from an add-on — they need a custom integration to register with HA's issue registry. Persistent notifications are the closest equivalent and work fine.
 
-| Field         | Required | Notes |
-| ------------- | -------- | ----- |
-| `name`        | yes      | Used for the subdirectory and filename. Must be unique. |
-| `address`     | yes      | Hostname (`foo.local`) or IPv4. |
-| `noise_psk`   | no       | The base64 key from `api: encryption: key:` in the device's YAML. Required if encryption is enabled (almost always). |
-| `password`    | no       | Legacy API password if used instead of noise PSK. |
-| `rotation`    | no       | `hourly`, `daily`, `weekly`, or `size`. Default `daily`. |
-| `retention`   | no       | For time-based rotation: number of past periods to keep (30 daily = 30 days). For `size`: number of backup files to keep. Default 30. |
-| `max_size_mb` | no       | Only used when `rotation: size`. Default 10 MB. |
-| `log_level`   | no       | `NONE`/`ERROR`/`WARN`/`INFO`/`DEBUG`/`VERBOSE`/`VERY_VERBOSE`. Default `DEBUG`. Beware `VERY_VERBOSE` can destabilize the device. |
-| `notify`      | no       | Whether anomaly notifications fire for this device. Default `true`. Set to `false` to silence a chatty device while still capturing its logs. |
-
-### Notifications
-
-The add-on classifies every log line into one of these categories:
-
-| Category          | Matches |
-| ----------------- | ------- |
-| `error`           | `[E]` log severity |
-| `warning`         | `[W]` log severity |
-| `reboot`          | `ESPHome version`, `Running through setup()`, `rst:0x`, `esp_image:`, `ESP-ROM:` |
-| `brownout`        | `Brownout` (any case) |
-| `watchdog`        | `Task watchdog`, `wdt:`, `Guru Meditation`, `Exception(`, `abort()` |
-| `wifi_disconnect` | `WiFi … disconnect`, `Disconnected from WiFi`, `Lost connection … WiFi` |
-| `sensor_failure`  | `Failed to read`, `Sensor … invalid`, `checksum … invalid`, `CRC check failed` |
-
-It keeps a rolling `window_hours` deque of events per device. After every new
-event it re-evaluates: if **any** category's count is `>=` its threshold, a
-notification is posted — at most one per device every `debounce_minutes`.
-
-| Field              | Default | Notes |
-| ------------------ | ------- | ----- |
-| `enabled`          | `true`  | Global on/off for the notifier. |
-| `debounce_minutes` | 60      | Minimum time between two notifications for the same device. |
-| `window_hours`     | 24      | Size of the rolling window used to count events. |
-| `thresholds.error` | 1       | Any single error fires. |
-| `thresholds.warning` | 10    | |
-| `thresholds.reboot` | 2      | More than 2 reboots a day usually indicates a problem. |
-| `thresholds.brownout` | 1    | Any brownout fires - they almost always mean a bad power supply. |
-| `thresholds.watchdog` | 1    | |
-| `thresholds.wifi_disconnect` | 20 | Occasional Wi-Fi blips are normal; 20+ a day is not. |
-| `thresholds.sensor_failure` | 5 | |
-
-Notifications appear in Home Assistant's bell icon (top right) and in the
-mobile app if installed. Each notification uses `notification_id =
-"esphome_logger_<device-name>"`, so subsequent alerts for the same device
-overwrite the previous one rather than stacking.
-
-To pause notifications without losing log capture, either set
-`notifications.enabled: false` globally or `notify: false` on individual
-devices.
-
-### Daily summary
-
-At a configurable time each day (default 08:00 local), the add-on posts a
-single consolidated `persistent_notification` summarizing the last
-`window_hours` of activity for every device with notifications enabled. The
-notification uses `notification_id = "esphome_logger_daily_summary"` so each
-day's summary replaces the previous one.
-
-| Field             | Default | Notes |
-| ----------------- | ------- | ----- |
-| `enabled`         | `true`  | Master switch for the daily summary. |
-| `hour`            | `8`     | Local hour, 0–23. |
-| `minute`          | `0`     | Local minute, 0–59. |
-| `post_when_clean` | `true`  | If false, the summary is only posted when at least one device has a non-zero category. With `true` you get a daily heartbeat even on quiet days. |
-
-Verdict icons in the title:
-- ✅ all devices clean over the window
-- ⚠️ at least one device has minor activity (warnings, modest Wi-Fi blips)
-- 🚨 at least one device crossed a critical threshold (errors, reboots,
-  brownouts, watchdog/crashes, sensor failures)
-
-The summary uses the same sliding window the real-time notifier uses, so the
-counts you see at 08:00 reflect the prior 24 hours of stream activity. If the
-add-on was recently restarted the window may be partial — the message
-explicitly says so when that's the case.
-
-### Rotation semantics (read this once)
-
-- `hourly`: the current log file is `<name>.log`; at the top of each hour the
-  current file is renamed to `<name>.log.YYYY-MM-DD_HH`. Files past
-  `retention` are deleted by Python's logging machinery.
-- `daily`: rotates at local midnight. Archived as `<name>.log.YYYY-MM-DD`.
-- `weekly`: rotates Monday 00:00.
-- `size`: rotates when `<name>.log` exceeds `max_size_mb`. Archives are
-  `<name>.log.1`, `<name>.log.2`, ..., up to `retention` files.
-
-## Reviewing logs later
+## Output layout
 
 ```
-ls -lh /share/esphome-logs/crowpanel/
-tail -f /share/esphome-logs/crowpanel/crowpanel.log
-grep -i 'error\|warn' /share/esphome-logs/crowpanel/*
-
-# Across all devices:
-grep -ri 'wifi disconnect' /share/esphome-logs/
-
-# Time-bounded:
-awk '$1 >= "2026-05-11T08:00" && $1 <= "2026-05-11T09:00"' \
-    /share/esphome-logs/crowpanel/crowpanel.log
+/share/esphome-logs/
+    crowpanel/
+        crowpanel.log              ← current
+        crowpanel.log.2026-05-16   ← yesterday
+        crowpanel.log.2026-05-15
+    upsy-desky/
+        upsy-desky.log
+        ...
 ```
+
+Every line is prefixed with an ISO-8601 timestamp. ANSI color codes are stripped on the way in.
+
+Browse `/share` with the File editor, Studio Code Server, Samba, or Advanced SSH add-on. From a terminal: `tail -f /share/esphome-logs/crowpanel/crowpanel.log`.
+
+## Rotation
+
+- `hourly` — rotates at the top of each hour. Archives named `<name>.log.YYYY-MM-DD_HH`.
+- `daily` — rotates at midnight local time. Archives named `<name>.log.YYYY-MM-DD`.
+- `weekly` — rotates Monday 00:00 local.
+- `size` — rotates when the file exceeds `max_size_mb`. Archives numbered `<name>.log.1`, `.log.2`, etc.
+
+Anything past `retention` gets pruned automatically.
 
 ## Troubleshooting
 
-- **mDNS shows no devices**: make sure `host_network: true` is in
-  `config.yaml` (it is by default in this build). On HA-OS this should expose
-  the host LAN to the container. If your network spans VLANs, mDNS may not
-  cross them — fall back to typing IP addresses into `devices:` directly.
-- **`Authentication failed`** on a device: `noise_psk` doesn't match
-  `api.encryption.key` in that device's YAML.
-- **Build fails on Pi for `noiseprotocol`**: the Dockerfile already installs
-  `build-base / libffi-dev / openssl-dev` to handle cffi compilation. If it
-  still fails, check the Supervisor log for the actual pip error.
-- **Add-on starts but no files appear**: check the add-on Log tab — there
-  should be a `[device] writing to /share/...` line per device. If not, the
-  `devices:` list is empty or all entries failed validation.
+**Discovery shows no devices.** Either nothing's connected to HA via the ESPHome integration yet, or the `homeassistant_config:ro` mount didn't take effect. The add-on log will say `no readable core.config_entries` in the latter case. Fix: `ha supervisor restart`.
 
-## Upgrading from v1.0 (single-device, bash version)
+**Connected but the log file stays empty.** The device's `logger:` block has `level: NONE` or is missing entirely. INFO is fine and quiet; DEBUG is fine and chatty.
 
-The slug changed from `crowpanel_logger` to `esphome_logger`. To upgrade:
-remove the old add-on, drop in this folder, reload the store, install the new
-one. Existing files under `/share/esphome-logs/crowpanel-*.log` are not
-touched — the v2 layout puts logs under
-`/share/esphome-logs/<name>/<name>.log`, so they coexist.
+**`Authentication failed`.** The `noise_psk` doesn't match the key in the device's YAML. The first-run discovery message tells you which devices HA has a PSK for; if it says `psk=MISSING`, the integration in HA was set up without encryption (rare but possible).
+
+**Notifications return 401.** The supervisor's manifest cache hasn't picked up `homeassistant_api: true`. `ha supervisor restart` followed by `ha addons update local_esphome_logger` usually fixes it.
+
+**Updated the add-on but new options or mounts don't show up.** Same root cause — the supervisor caches the manifest at install time. `ha supervisor restart` forces a re-read of every local add-on's `config.yaml`.
+
+## License
+
+MIT. See LICENSE.

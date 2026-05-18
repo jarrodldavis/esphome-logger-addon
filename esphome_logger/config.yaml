@@ -1,6 +1,6 @@
 name: "ESPHome Logger"
-description: "Discover ESPHome devices on the LAN, persist selected devices' logs to /share with per-device rotation and retention, post HA persistent notifications when anomalies cross thresholds, and post a daily health summary at a configured time."
-version: "2.2.0"
+description: "Discover ESPHome devices via Home Assistant's config entries (no mDNS dependency), persist selected devices' logs to /share with per-device rotation and retention, post HA persistent notifications when anomalies cross thresholds, and post a daily health summary at a configured time."
+version: "2.3.0"
 slug: "esphome_logger"
 init: false
 arch:
@@ -11,13 +11,14 @@ arch:
   - i386
 startup: services
 boot: auto
-host_network: true     # required so mDNS discovery sees devices on the LAN
-homeassistant_api: true # so we can POST persistent_notification.create
+host_network: true              # device traffic is on the LAN
+homeassistant_api: true         # POST persistent_notification.create
 map:
   - share:rw
+  - homeassistant_config:ro     # read /homeassistant/.storage/core.config_entries
 options:
   discover_on_start: true
-  discovery_timeout: 6
+  auto_add_devices: false       # if true, log every ESPHome device HA knows about
   log_subdir: "esphome-logs"
   devices:
     - name: "crowpanel"
@@ -50,7 +51,7 @@ options:
     post_when_clean: true
 schema:
   discover_on_start: bool
-  discovery_timeout: int(1,60)
+  auto_add_devices: bool
   log_subdir: str
   devices:
     - name: str

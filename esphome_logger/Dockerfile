@@ -23,7 +23,6 @@ RUN apk add --no-cache \
         openssl-dev \
     && pip3 install --break-system-packages \
         "aioesphomeapi>=24.0.0" \
-        "zeroconf>=0.131.0" \
     && apk del build-base python3-dev libffi-dev openssl-dev \
     && rm -rf /root/.cache /tmp/*
 

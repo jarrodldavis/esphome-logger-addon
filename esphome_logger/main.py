@@ -48,19 +48,19 @@ except ImportError as exc:  # pragma: no cover - only hit if image build broke
 else:
     _aioesphomeapi_err = None
 
-try:
-    from zeroconf import IPVersion, ServiceStateChange
-    from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
-except ImportError as exc:  # pragma: no cover
-    AsyncZeroconf = None  # type: ignore
-    _zeroconf_err = exc
-else:
-    _zeroconf_err = None
-
 # ----- constants ------------------------------------------------------------
 
 CONFIG_PATH = os.environ.get("OPTIONS_JSON", "/data/options.json")
 SHARE_ROOT = pathlib.Path(os.environ.get("SHARE_ROOT", "/share"))
+
+# Home Assistant's config_entries file. The Supervisor mounts the user's HA
+# /config at /homeassistant when the add-on has `homeassistant_config:ro` in
+# its map. Fall back to /config for older HA versions / alternate mounts.
+HA_CONFIG_ENTRIES_CANDIDATES = [
+    pathlib.Path(os.environ.get("HA_CONFIG_ENTRIES",
+                                "/homeassistant/.storage/core.config_entries")),
+    pathlib.Path("/config/.storage/core.config_entries"),
+]
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
@@ -297,56 +297,77 @@ class HANotifier:
         return False
 
 
-# ----- mDNS discovery -------------------------------------------------------
+# ----- HA config-entries discovery -----------------------------------------
 
-async def discover_esphome(timeout: float) -> List[Tuple[str, str, str]]:
-    if AsyncZeroconf is None:
-        warn(f"zeroconf not available ({_zeroconf_err!r}); skipping discovery")
+def _find_ha_config_entries_path() -> Optional[pathlib.Path]:
+    for p in HA_CONFIG_ENTRIES_CANDIDATES:
+        if p.exists():
+            return p
+    return None
+
+
+def discover_from_ha() -> List[Dict[str, Any]]:
+    """Read Home Assistant's persisted config_entries file and return one
+    dict per ESPHome integration entry, in stable order by title.
+
+    Each dict has: name (device_name), title, address (host), port,
+    noise_psk, password, unique_id. Missing fields are normalized to
+    sensible defaults (empty strings, port 6053).
+    """
+    path = _find_ha_config_entries_path()
+    if path is None:
+        warn("discover_from_ha: no readable core.config_entries at any of "
+             f"{[str(p) for p in HA_CONFIG_ENTRIES_CANDIDATES]} - "
+             "is 'homeassistant_config:ro' in the add-on map?")
         return []
 
-    info(f"discovery: browsing _esphomelib._tcp.local. for {timeout}s ...")
-    aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only)
-    found: Dict[str, Tuple[str, str]] = {}
-
-    def on_state_change(zeroconf, service_type, name, state_change):
-        if state_change != ServiceStateChange.Added:
-            return
-        try:
-            inf = zeroconf.get_service_info(service_type, name, timeout=2000)
-        except Exception:
-            return
-        if not inf:
-            return
-        addrs = inf.parsed_addresses() if hasattr(inf, "parsed_addresses") else []
-        ipv4 = next((a for a in addrs if ":" not in a), "?")
-        host = (inf.server or name).rstrip(".")
-        found[name] = (host, ipv4)
-
-    browser = AsyncServiceBrowser(
-        aiozc.zeroconf,
-        "_esphomelib._tcp.local.",
-        handlers=[on_state_change],
-    )
     try:
-        await asyncio.sleep(timeout)
-    finally:
-        await browser.async_cancel()
-        await aiozc.async_close()
+        with open(path, "r") as f:
+            data = json.load(f)
+    except Exception:
+        error(f"discover_from_ha: failed to read/parse {path}:\n"
+              f"{traceback.format_exc()}")
+        return []
 
-    results: List[Tuple[str, str, str]] = []
-    for full_name, (host, ipv4) in sorted(found.items()):
-        short = full_name.split(".")[0]
-        results.append((short, host, ipv4))
+    entries = (data.get("data") or {}).get("entries") or []
+    out: List[Dict[str, Any]] = []
+    for e in entries:
+        if e.get("domain") != "esphome":
+            continue
+        d = e.get("data") or {}
+        # Sanity: skip entries with no host (e.g. half-configured).
+        host = d.get("host")
+        if not host:
+            continue
+        out.append({
+            "name": (d.get("device_name") or
+                     e.get("title", "").lower().replace(" ", "-")
+                     or "unknown"),
+            "title": e.get("title", ""),
+            "address": host,
+            "port": int(d.get("port") or 6053),
+            "noise_psk": d.get("noise_psk") or "",
+            "password": d.get("password") or "",
+            "unique_id": e.get("unique_id", ""),
+        })
+    out.sort(key=lambda x: x["title"].lower() or x["name"].lower())
+    return out
 
-    if not results:
-        info("discovery: no ESPHome devices found via mDNS")
-    else:
-        info(f"discovery: {len(results)} device(s) found:")
-        for short, host, ipv4 in results:
-            info(f"  - {short}   address={ipv4}   hostname={host}")
-        info("discovery: paste any of the above into the 'devices' list in "
-             "Configuration to capture its logs.")
-    return results
+
+def log_ha_discovery(devices: List[Dict[str, Any]]) -> None:
+    if not devices:
+        info("discovery: HA has no ESPHome integration entries to enumerate. "
+             "Either no devices are connected to HA via ESPHome, or "
+             "/homeassistant/.storage/core.config_entries is unreadable.")
+        return
+    info(f"discovery: {len(devices)} ESPHome device(s) registered in HA:")
+    for d in devices:
+        psk_marker = "psk=set" if d["noise_psk"] else "psk=MISSING"
+        info(f"  - {d['name']:<28} address={d['address']:<15} {psk_marker}"
+             f"  ({d['title']})")
+    info("discovery: copy any of the above into the 'devices' list in "
+         "Configuration to capture its logs, OR set 'auto_add_devices: true' "
+         "to capture all of them with default settings.")
 
 
 # ----- anomaly classifier ---------------------------------------------------
@@ -726,29 +747,53 @@ async def main_async() -> int:
          f"post_when_clean={daily_summary_cfg['post_when_clean']}")
     notifier = HANotifier()
 
+    ha_devices: List[Dict[str, Any]] = []
     if opts.get("discover_on_start", True):
         try:
-            await discover_esphome(float(opts.get("discovery_timeout") or 6))
+            ha_devices = discover_from_ha()
+            log_ha_discovery(ha_devices)
         except Exception:
-            warn(f"discovery failed:\n{traceback.format_exc()}")
+            warn(f"HA discovery failed:\n{traceback.format_exc()}")
 
     devices_cfg: List[Dict[str, Any]] = opts.get("devices") or []
-    if not devices_cfg:
-        info("no devices configured under 'devices:' - nothing to log. "
-             "Add entries based on the discovery results above and restart.")
-        while True:
-            await asyncio.sleep(3600)
+    auto_add = bool(opts.get("auto_add_devices", False))
 
+    # Seed the device list from HA if auto_add_devices is on. Manual entries
+    # in `devices:` then layer on top (and override duplicates by name).
     seen: Dict[str, Dict[str, Any]] = {}
+    if auto_add:
+        info(f"auto_add_devices is true - enrolling all {len(ha_devices)} "
+             f"HA-known ESPHome device(s) with default settings")
+        for ha in ha_devices:
+            raw = {
+                "name": ha["name"],
+                "address": ha["address"],
+                "noise_psk": ha["noise_psk"],
+                "password": ha["password"],
+            }
+            if not raw["name"] or not raw["address"]:
+                continue
+            seen[raw["name"]] = merge_device(raw, defaults)
+
+    overrides = 0
     for raw in devices_cfg:
         if not raw.get("name") or not raw.get("address"):
             warn(f"skipping device with missing name or address: {raw!r}")
             continue
         merged = merge_device(raw, defaults)
         if merged["name"] in seen:
-            warn(f"duplicate device name '{merged['name']}'; keeping first")
-            continue
+            overrides += 1
         seen[merged["name"]] = merged
+    if overrides:
+        info(f"devices: {overrides} manual entry/entries override auto-add defaults")
+
+    if not seen:
+        info("no devices configured (devices: list is empty and "
+             "auto_add_devices is false). Either set auto_add_devices: true "
+             "or paste entries from the discovery list above into "
+             "Configuration, then restart.")
+        while True:
+            await asyncio.sleep(3600)
 
     if not seen:
         error("no valid devices after parsing 'devices:'")
