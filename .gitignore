@@ -1,0 +1,15 @@
+# Python bytecode left over from local dry runs
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Build artifacts (we never check these in)
+*.bak.*
+options.json
+.esphome/

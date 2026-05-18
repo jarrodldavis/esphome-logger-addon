@@ -1,0 +1,86 @@
+name: "ESPHome Logger"
+description: "Discover ESPHome devices on the LAN, persist selected devices' logs to /share with per-device rotation and retention, post HA persistent notifications when anomalies cross thresholds, and post a daily health summary at a configured time."
+version: "2.2.0"
+slug: "esphome_logger"
+init: false
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: services
+boot: auto
+host_network: true     # required so mDNS discovery sees devices on the LAN
+homeassistant_api: true # so we can POST persistent_notification.create
+map:
+  - share:rw
+options:
+  discover_on_start: true
+  discovery_timeout: 6
+  log_subdir: "esphome-logs"
+  devices:
+    - name: "crowpanel"
+      address: "crowpanel.local"
+      noise_psk: ""
+      rotation: "daily"
+      retention: 30
+      notify: true
+  defaults:
+    rotation: "daily"
+    retention: 30
+    max_size_mb: 10
+    log_level: "DEBUG"
+  notifications:
+    enabled: true
+    debounce_minutes: 60
+    window_hours: 24
+    thresholds:
+      error: 1
+      warning: 10
+      reboot: 2
+      brownout: 1
+      wifi_disconnect: 20
+      watchdog: 1
+      sensor_failure: 5
+  daily_summary:
+    enabled: true
+    hour: 8
+    minute: 0
+    post_when_clean: true
+schema:
+  discover_on_start: bool
+  discovery_timeout: int(1,60)
+  log_subdir: str
+  devices:
+    - name: str
+      address: str
+      noise_psk: password?
+      password: password?
+      rotation: list(hourly|daily|weekly|size)?
+      retention: int(1,365)?
+      max_size_mb: int(1,1024)?
+      log_level: list(NONE|ERROR|WARN|INFO|DEBUG|VERBOSE|VERY_VERBOSE)?
+      notify: bool?
+  defaults:
+    rotation: list(hourly|daily|weekly|size)
+    retention: int(1,365)
+    max_size_mb: int(1,1024)
+    log_level: list(NONE|ERROR|WARN|INFO|DEBUG|VERBOSE|VERY_VERBOSE)
+  notifications:
+    enabled: bool
+    debounce_minutes: int(1,1440)
+    window_hours: int(1,168)
+    thresholds:
+      error: int(1,10000)
+      warning: int(1,10000)
+      reboot: int(1,10000)
+      brownout: int(1,10000)
+      wifi_disconnect: int(1,10000)
+      watchdog: int(1,10000)
+      sensor_failure: int(1,10000)
+  daily_summary:
+    enabled: bool
+    hour: int(0,23)
+    minute: int(0,59)
+    post_when_clean: bool
