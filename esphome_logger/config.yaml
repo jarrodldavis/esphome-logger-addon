@@ -1,14 +1,11 @@
 name: "ESPHome Logger"
 description: "Discover ESPHome devices via Home Assistant's config entries (no mDNS dependency), persist selected devices' logs to /share with per-device rotation and retention, post HA persistent notifications when anomalies cross thresholds, and post a daily health summary at a configured time."
-version: "2.3.0"
+version: "2.3.1"
 slug: "esphome_logger"
 init: false
 arch:
   - aarch64
   - amd64
-  - armhf
-  - armv7
-  - i386
 startup: services
 boot: auto
 host_network: true              # device traffic is on the LAN
