@@ -783,11 +783,16 @@ async def main_async() -> int:
             continue
         if name in seen:
             overrides += 1
-            # Merge explicit config into the auto-added base so that auto-detected
-            # fields (address, noise_psk, password) are inherited when not provided.
-            # Precedence: explicit config > auto-added values > global defaults.
+            # Use only the auto-detected connection fields (address, noise_psk,
+            # password) as the merge base – not the fully-defaulted auto-add entry.
+            # This prevents pre-applied defaults (e.g. notify:True) from silently
+            # overriding the explicit config when a field is absent from the entry.
+            # Precedence: explicit config > auto-detected values > global defaults.
+            discovery = {k: seen[name][k]
+                         for k in ("address", "noise_psk", "password")
+                         if k in seen[name]}
             explicit = {k: v for k, v in raw.items() if v is not None}
-            seen[name] = merge_device({**seen[name], **explicit}, defaults)
+            seen[name] = merge_device({"name": name, **discovery, **explicit}, defaults)
         else:
             if not raw.get("address"):
                 warn(f"skipping device with missing address: {raw!r}")

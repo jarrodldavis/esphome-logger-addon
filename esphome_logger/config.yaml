@@ -65,6 +65,7 @@ schema:
     retention: int(1,365)
     max_size_mb: int(1,1024)
     log_level: list(NONE|ERROR|WARN|INFO|DEBUG|VERBOSE|VERY_VERBOSE)
+    notify: bool?
   notifications:
     enabled: bool
     debounce_minutes: int(1,1440)
