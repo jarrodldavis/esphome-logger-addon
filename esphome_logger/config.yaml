@@ -52,7 +52,7 @@ schema:
   log_subdir: str
   devices:
     - name: str
-      address: str
+      address: str?
       noise_psk: password?
       password: password?
       rotation: list(hourly|daily|weekly|size)?
