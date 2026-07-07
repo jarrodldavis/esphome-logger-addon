@@ -777,15 +777,29 @@ async def main_async() -> int:
 
     overrides = 0
     for raw in devices_cfg:
-        if not raw.get("name") or not raw.get("address"):
-            warn(f"skipping device with missing name or address: {raw!r}")
+        name = raw.get("name")
+        if not name:
+            warn(f"skipping device with missing name: {raw!r}")
             continue
-        merged = merge_device(raw, defaults)
-        if merged["name"] in seen:
+        if name in seen:
             overrides += 1
-        seen[merged["name"]] = merged
+            # Use only the auto-detected connection fields (address, noise_psk,
+            # password) as the merge base – not the fully-defaulted auto-add entry.
+            # This prevents pre-applied defaults (e.g. notify:True) from silently
+            # overriding the explicit config when a field is absent from the entry.
+            # Precedence: explicit config > auto-detected values > global defaults.
+            discovery = {k: seen[name][k]
+                         for k in ("address", "noise_psk", "password")
+                         if k in seen[name]}
+            explicit = {k: v for k, v in raw.items() if v is not None}
+            seen[name] = merge_device({"name": name, **discovery, **explicit}, defaults)
+        else:
+            if not raw.get("address"):
+                warn(f"skipping device with missing address: {raw!r}")
+                continue
+            seen[name] = merge_device(raw, defaults)
     if overrides:
-        info(f"devices: {overrides} manual entry/entries override auto-add defaults")
+        info(f"devices: {overrides} manual entry/entries merged with auto-add defaults")
 
     if not seen:
         info("no devices configured (devices: list is empty and "
