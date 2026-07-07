@@ -777,15 +777,24 @@ async def main_async() -> int:
 
     overrides = 0
     for raw in devices_cfg:
-        if not raw.get("name") or not raw.get("address"):
-            warn(f"skipping device with missing name or address: {raw!r}")
+        name = raw.get("name")
+        if not name:
+            warn(f"skipping device with missing name: {raw!r}")
             continue
-        merged = merge_device(raw, defaults)
-        if merged["name"] in seen:
+        if name in seen:
             overrides += 1
-        seen[merged["name"]] = merged
+            # Merge explicit config into the auto-added base so that auto-detected
+            # fields (address, noise_psk, password) are inherited when not provided.
+            # Precedence: explicit config > auto-added values > global defaults.
+            explicit = {k: v for k, v in raw.items() if v is not None}
+            seen[name] = merge_device({**seen[name], **explicit}, defaults)
+        else:
+            if not raw.get("address"):
+                warn(f"skipping device with missing address: {raw!r}")
+                continue
+            seen[name] = merge_device(raw, defaults)
     if overrides:
-        info(f"devices: {overrides} manual entry/entries override auto-add defaults")
+        info(f"devices: {overrides} manual entry/entries merged with auto-add defaults")
 
     if not seen:
         info("no devices configured (devices: list is empty and "
